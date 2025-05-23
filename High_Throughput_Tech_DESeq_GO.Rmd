@@ -1,0 +1,125 @@
+---
+title: "High_Throughput_Tech_DESeq_GO"
+author: "Joseph Cottrell"
+date: "2024-12-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+```{r Set directories}
+quant_dir <- "C:/Users/josep/OneDrive/Desktop/High_Throughput_Downloads/R_data/Salmon_quants"
+metadata_dir <- "C:/Users/josep/OneDrive/Desktop/High_Throughput_Downloads/R_data/Salmon_dataframe"
+tx2gene_dir <- "C:/Users/josep/OneDrive/Desktop/High_Throughput_Downloads/R_data/tx2gene.gencode"
+```
+
+#DESeq
+
+```{r Load sample metadata}
+samples <- read.csv(file.path(metadata_dir, "SRR_dataframe.csv"), header=TRUE)
+rownames(samples) <- samples$run
+samples <- samples[, c("Strains", "Condition")]
+```
+
+```{r Load transcript-to-gene mapping}
+tx2gene <- read.csv(file.path(tx2gene_dir, "tx2gene.gencode.v47.csv"))
+```
+
+```{r Specify quantification files}
+quant_files <- file.path(quant_dir, c(
+  "SRR7407814_quant.sf", "SRR7407815_quant.sf", "SRR7407816_quant.sf", 
+  "SRR7407834_quant.sf", "SRR7407833_quant.sf", "SRR7407832_quant.sf"
+))
+```
+
+```{r Import quantification data}
+library(tximport)
+txi <- tximport(quant_files, type = "salmon", tx2gene = tx2gene, ignoreAfterBar = TRUE)
+summary(txi)
+```
+
+```{r Prepare for DESeq2 analysis}
+library(DESeq2)
+ddsTxi <- DESeqDataSetFromTximport(txi, colData = samples, design = ~ Condition)
+```
+
+```{r Perform DESeq analysis}
+dds <- DESeq(ddsTxi)
+```
+
+```{r Extract results}
+res <- results(dds)
+```
+
+```{r Add gene symbol column}
+library(org.Hs.eg.db)
+res$ensembl_no_version <- sub("\\..*", "", rownames(res))
+res$entrezID <- mapIds(org.Hs.eg.db, keys = res$ensembl_no_version, column = "ENTREZID", keytype = "ENSEMBL", multiVals = "first")
+res$symbol <- mapIds(org.Hs.eg.db, keys = res$ensembl_no_version, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+```
+
+```{r Summarise results}
+summary(res)
+```
+
+```{r Filter significant results}
+resOrdered <- res[order(res$padj), ]
+resOrdered <- resOrdered[complete.cases(resOrdered) & resOrdered$padj <= 0.05, ]
+```
+
+```{r Save DESeq results, eval=FALSE}
+write.csv(as.data.frame(resOrdered), file = "DESeq2_results.csv")
+```
+
+```{r Create and save MA plot}
+png("MA_plot.png", width = 800, height = 600)
+plotMA(resOrdered, main = "DESeq2 MA-plot", ylim = c(-2, 2))
+dev.off()
+```
+
+```{r Display MA plot with annotations}
+plotMA(resOrdered, main = "DESeq2 MA-plot", ylim = c(-15, 15))
+top_genes_pos <- order(resOrdered$log2FoldChange, decreasing = TRUE)[1:10]
+top_genes_neg <- order(resOrdered$log2FoldChange, decreasing = FALSE)[1:10]
+top_genes <- c(top_genes_pos, top_genes_neg)
+text(resOrdered$baseMean[top_genes_pos], resOrdered$log2FoldChange[top_genes_pos], labels = resOrdered$symbol[top_genes_pos], cex = 0.4, pos = 1, col = "green")
+text(resOrdered$baseMean[top_genes_neg], resOrdered$log2FoldChange[top_genes_neg], labels = resOrdered$symbol[top_genes_neg], cex = 0.4, pos = 1, col = "red")
+```
+
+```{r Generate volcano plot}
+resOrdered$neg_log_pvalue <- -log10(resOrdered$pvalue)
+plot(resOrdered$log2FoldChange, resOrdered$neg_log_pvalue, pch = 20, col = ifelse(resOrdered$padj < 0.05, "blue", "gray"), xlab = "Log2 Fold Change", ylab = "-Log10 p-value", main = "Volcano Plot of DEGs", cex = 0.5)
+text(resOrdered$log2FoldChange[top_genes_pos], resOrdered$neg_log_pvalue[top_genes_pos], labels = resOrdered$symbol[top_genes_pos], cex = 0.3, col = "green")
+text(resOrdered$log2FoldChange[top_genes_neg], resOrdered$neg_log_pvalue[top_genes_neg], labels = resOrdered$symbol[top_genes_neg], cex = 0.3, col = "red")
+```
+
+#GO Analysis
+
+```{r Set thresholds for GO analysis}
+significant_genes <- subset(resOrdered, padj < 0.05 & abs(log2FoldChange) > 1)
+```
+
+```{r Perform GO enrichment analysis}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+gene_list <- significant_genes$symbol
+ego <- enrichGO(gene = gene_list, OrgDb = org.Hs.eg.db, keyType = "SYMBOL", ont = "BP")
+barplot(ego, showCategory = 10)
+cnetplot(ego, showCategory = 10)
+```
+
+```{r Apoptosis-specific GO enrichment}
+apoptosis_ego <- ego
+apoptosis_ego@result <- ego@result %>% filter(grepl("apoptosis|apoptotic", Description, ignore.case = TRUE))
+barplot(apoptosis_ego, showCategory = 10, font.size = 8.2, title = "Apoptosis-related Enriched GO Terms")
+```
+
+```{r Generate apoptosis cnet plot}
+if (!inherits(apoptosis_ego, "enrichResult")) stop("Invalid apoptosis_ego object.")
+top_terms <- apoptosis_ego@result %>% mutate(GeneRatio = sapply(strsplit(GeneRatio, "/"), function(x) as.numeric(x[1]) / as.numeric(x[2]))) %>% arrange(desc(GeneRatio)) %>% head(5)
+subset_ego <- clusterProfiler::filter(apoptosis_ego, ID %in% top_terms$ID)
+if (nrow(subset_ego@result) == 0) stop("No data in subsetted enrichResult.")
+cnetplot(subset_ego, showCategory = 4, circular = TRUE, node_label = "all")

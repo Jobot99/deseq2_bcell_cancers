@@ -1,0 +1,81 @@
+# Set directories
+```{r}
+quant_dir <- "C:/Users/josep/OneDrive/Desktop/High_Throughput_Downloads/R_data/Salmon_quants"
+metadata_dir <- "C:/Users/josep/OneDrive/Desktop/High_Throughput_Downloads/R_data/Salmon_dataframe"
+tx2gene_dir <- "C:/Users/josep/OneDrive/Desktop/High_Throughput_Downloads/R_data/tx2gene.gencode"
+```
+
+# Load sample metadata
+
+```{r}
+samples <- read.csv(file.path(metadata_dir, "SRR_dataframe.csv"), header=TRUE)
+rownames(samples) <- samples$run
+samples <- samples[ , c("Strains", "Condition")]
+```
+
+# Load transcript-to-gene mapping
+
+```{r}
+tx2gene <- read.csv(file.path(tx2gene_dir, "tx2gene.gencode.v47.csv"))
+```
+
+
+# Specify quantification files
+
+```{r}
+quant_files <- file.path(quant_dir, c("SRR7407814_quant.sf", "SRR7407815_quant.sf", "SRR7407816_quant.sf", "SRR7407834_quant.sf", "SRR7407833_quant.sf", "SRR7407832_quant.sf"))
+```
+
+# Import quantification data
+
+```{r}
+library(tximport)
+txi <- tximport(quant_files, type = "salmon", tx2gene = tx2gene, ignoreAfterBar = TRUE)
+summary(txi)
+```
+
+# Prepare for DESeq2 analysis
+
+```{r}
+library("DESeq2")
+ddsTxi <- DESeqDataSetFromTximport(txi,
+                                   colData = samples,
+                                   design = ~ Condition)
+```
+# Perform DESeq analysis
+```{r}
+dds <- DESeq(ddsTxi)
+```
+
+# Extract results
+```{r}
+res <- results(dds)
+```
+
+# Summarize results
+```{r}
+summary(res)
+```
+
+# Order results by significance
+```{r}
+resOrdered <- res[order(res$padj), ]
+```
+
+# Save results to a CSV file
+```{r}
+write.csv(as.data.frame(resOrdered), file = "DESeq2_results.csv")
+```
+
+# Create and save MA plot
+```{r}
+png("MA_plot.png", width = 800, height = 600)
+plotMA(res, main = "DESeq2 MA-plot", ylim = c(-2, 2))
+dev.off()
+```
+
+# Display the MA plot in the R session
+```{r}
+plotMA(res, main = "DESeq2 MA-plot", ylim = c(-2, 2))
+```
+
